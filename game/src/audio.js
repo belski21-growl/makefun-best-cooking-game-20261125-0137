@@ -1,217 +1,192 @@
-// Padang Kilat — synthesised WebAudio sounds. No audio files, no network: every
-// sound is built from oscillators and filtered noise at run time.
+// Padang Kilat — audio.js
+// All sound is synthesized live with WebAudio: a Minang-style backing of
+// talempong (pentatonic, ~106 BPM), saluang (breathy sine + vibrato) and a
+// gong every eight bars — no audio files, no recordings, nothing copyrighted.
+// Everything is guarded: no AudioContext, a suspended context, or mute all
+// mean silence instead of an exception. The music stops when the kuntilanak
+// arrives and resumes when she leaves.
+const BPM = 106;
+const STEP = 60 / BPM / 4; // one sixteenth note
+// Pentatonic ladder (C major pentatonic), two octaves.
+const SCALE = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99, 880.0, 1046.5];
+// Talempong pattern: 2 bars of 16 steps. null = rest, number = SCALE index.
+const TALEMPONG = [
+  5, null, 7, null, 8, null, 7, null, 6, null, 5, null, 4, null, 5, null,
+  7, null, 8, null, 9, null, 8, null, 7, null, 6, null, 5, null, 4, null,
+];
+// Saluang: one long note per bar, breathing across the phrase.
+const SALUANG = [6, 4, 5, 7];
+
 export function createAudio() {
   let ctx = null;
-  let sizzleNodes = null;
+  let master = null;
   let muted = false;
-  // Backsound: an ORIGINAL Minang-flavoured loop, all synth, no recordings.
-  let musicTimer = null;
-  let musicGain = null;
-  let musicStep = 0;
-  let nextNoteTime = 0;
+  let horror = false;
+  let timer = null;
+  let nextTime = 0;
+  let step = 0;
 
   function ensure() {
-    if (!ctx) {
+    if (ctx) return true;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      ctx = new AC();
+      master = ctx.createGain();
+      master.gain.value = muted ? 0 : 0.5;
+      master.connect(ctx.destination);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  function tone(freq, dur, type, gain, when, slideTo) {
+    if (!ctx || !master || muted) return;
+    try {
+      const t = when || ctx.currentTime;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(freq, t);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t + dur);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(gain, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      o.connect(g);
+      g.connect(master);
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    } catch (e) { /* silence on any audio error */ }
+  }
+  function noiseBurst(dur, gain, when) {
+    if (!ctx || !master || muted) return;
+    try {
+      const t = when || ctx.currentTime;
+      const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+      const src = ctx.createBufferSource();
+      const g = ctx.createGain();
+      src.buffer = buf;
+      g.gain.value = gain;
+      src.connect(g);
+      g.connect(master);
+      src.start(t);
+    } catch (e) { /* silence */ }
+  }
+  function scheduleStep(s, t) {
+    if (horror) return;
+    const bar = Math.floor(s / 16);
+    const pos = s % 16;
+    // Gong every 8 bars, on the first step.
+    if (s % 128 === 0) {
+      tone(55, 3.5, 'sine', 0.5, t);
+      tone(82.41, 3.0, 'sine', 0.25, t);
+    }
+    // Soft drum thump at the top of every bar.
+    if (pos === 0) tone(150, 0.18, 'sine', 0.35, t, 60);
+    if (pos === 8) tone(110, 0.12, 'sine', 0.18, t, 70);
+    // Talempong: bright triangle, fast decay, on the pattern.
+    const degree = TALEMPONG[s % 32];
+    if (degree !== null && degree !== undefined) {
+      tone(SCALE[degree], 0.45, 'triangle', 0.28, t);
+      tone(SCALE[degree] * 2, 0.2, 'sine', 0.08, t);
+    }
+    // Saluang: one long breathing note per bar, sine with vibrato.
+    if (pos === 0) {
+      const f = SCALE[SALUANG[bar % SALUANG.length]];
       try {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        ctx = new AC();
-      } catch { ctx = null; }
-    }
-    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
-    return ctx;
-  }
-
-  function tone(freq, dur, type, vol, when = 0, slideTo = 0) {
-    const c = ensure();
-    if (!c || muted) return;
-    const t0 = c.currentTime + when;
-    const osc = c.createOscillator();
-    const gain = c.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t0);
-    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(vol, t0 + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    osc.connect(gain).connect(c.destination);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.05);
-  }
-
-  function noiseBurst(dur, vol, filterFreq) {
-    const c = ensure();
-    if (!c || muted) return;
-    const t0 = c.currentTime;
-    const len = Math.max(1, Math.floor(c.sampleRate * dur));
-    const buf = c.createBuffer(1, len, c.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
-    const src = c.createBufferSource();
-    src.buffer = buf;
-    const filter = c.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = filterFreq;
-    const gain = c.createGain();
-    gain.gain.value = vol;
-    src.connect(filter).connect(gain).connect(c.destination);
-    src.start(t0);
-  }
-
-  // Pentatonic talempong melody (A minor pentatonic: A C D E G), 64 eighth
-  // steps = 8 bars. 0 = rest. Composed for this game — no existing tune.
-  const SCALE = { A4: 440, C5: 523.25, D5: 587.33, E5: 659.25, G5: 783.99, A5: 880, E4: 329.63, D4: 293.66 };
-  const MELODY = [
-    'E5', 0, 'G5', 0, 'A5', 0, 'G5', 'E5',
-    'D5', 0, 'E5', 0, 'G5', 0, 'E5', 0,
-    'E5', 0, 'G5', 0, 'A5', 'G5', 'E5', 'D5',
-    'C5', 0, 'D5', 'E5', 0, 0, 'D5', 0,
-    'E5', 0, 'G5', 0, 'A5', 0, 'G5', 'E5',
-    'A5', 0, 'G5', 'E5', 'D5', 0, 'E5', 0,
-    'D5', 'C5', 'D5', 0, 'E5', 0, 'D5', 'C5',
-    'A4', 0, 'C5', 'D5', 'E5', 0, 'D5', 0,
-  ];
-  // Saluang (flute): one long breath per two bars, root notes of the phrase.
-  const SALUANG = ['A4', 'E5', 'A4', 'D5'];
-  const GONG_FREQ = 55;
-
-  function musicNote(freq, t0, dur, type, vol) {
-    if (!ctx || !musicGain) return;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t0);
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(vol, t0 + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    osc.connect(gain).connect(musicGain);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.05);
-  }
-
-  function scheduleMusicStep(step, t0, eighth) {
-    // Talempong: bright triangle, fast decay — the plucked metallophone.
-    const m = MELODY[step % 64];
-    if (m) musicNote(SCALE[m], t0, eighth * 1.8, 'triangle', 0.055);
-    // Soft drum pulse on every bar start.
-    if (step % 8 === 0) musicNote(98, t0, 0.16, 'sine', 0.05);
-    // Saluang: long sine with vibrato, one breath per two bars.
-    if (step % 16 === 0) {
-      const f = SCALE[SALUANG[(step / 16) % 4]];
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      const lfo = ctx.createOscillator();
-      const lfoGain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(f, t0);
-      lfo.frequency.value = 5.5;
-      lfoGain.gain.value = 5;
-      lfo.connect(lfoGain).connect(osc.frequency);
-      const dur = eighth * 16;
-      gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.exponentialRampToValueAtTime(0.038, t0 + 0.5);
-      gain.gain.setValueAtTime(0.038, t0 + dur - 0.6);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-      osc.connect(gain).connect(musicGain);
-      osc.start(t0);
-      osc.stop(t0 + dur + 0.05);
-      lfo.start(t0);
-      lfo.stop(t0 + dur + 0.05);
-    }
-    // Gong: low sine, long decay, once per 8-bar loop.
-    if (step % 64 === 0) {
-      musicNote(GONG_FREQ, t0, 3.5, 'sine', 0.11);
-      musicNote(GONG_FREQ * 2, t0, 2.2, 'sine', 0.045);
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        const lfo = ctx.createOscillator();
+        const lfoGain = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = f;
+        lfo.type = 'sine';
+        lfo.frequency.value = 5.5;
+        lfoGain.gain.value = 6;
+        lfo.connect(lfoGain);
+        lfoGain.connect(o.frequency);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.14, t + 0.4);
+        g.gain.setValueAtTime(0.14, t + STEP * 12);
+        g.gain.linearRampToValueAtTime(0, t + STEP * 16);
+        o.connect(g);
+        g.connect(master);
+        o.start(t);
+        o.stop(t + STEP * 16 + 0.05);
+        lfo.start(t);
+        lfo.stop(t + STEP * 16 + 0.05);
+      } catch (e) { /* silence */ }
     }
   }
-
+  function tick() {
+    if (!ctx || ctx.state !== 'running') return;
+    while (nextTime < ctx.currentTime + 0.25) {
+      scheduleStep(step, nextTime);
+      step += 1;
+      nextTime += STEP;
+    }
+  }
   return {
-    unlock() { ensure(); },
+    get muted() { return muted; },
+    start() {
+      if (!ensure()) return;
+      try {
+        if (ctx.state === 'suspended') ctx.resume();
+        if (!timer) {
+          nextTime = ctx.currentTime + 0.1;
+          step = 0;
+          timer = setInterval(tick, 90);
+        }
+      } catch (e) { /* silence */ }
+    },
+    stop() {
+      if (timer) { clearInterval(timer); timer = null; }
+      if (ctx) { try { ctx.suspend(); } catch (e) {} }
+    },
+    setMuted(m) {
+      muted = !!m;
+      if (master) master.gain.value = muted ? 0 : 0.5;
+    },
     toggleMute() {
-      muted = !muted;
-      if (musicGain) {
-        try { musicGain.gain.value = muted ? 0 : 0.9; } catch { /* node gone */ }
-      }
+      this.setMuted(!muted);
       return muted;
     },
-    // ---- backsound: talempong + saluang + gong, ~106 BPM, 8-bar loop ----
-    startMusic() {
-      try {
-        const c = ensure();
-        if (!c || muted || musicTimer) return;
-        if (c.state !== 'running') return; // headless/suspended: never throw, never pile up
-        if (!musicGain) {
-          musicGain = c.createGain();
-          musicGain.gain.value = 0.9;
-          musicGain.connect(c.destination);
+    setHorror(h) {
+      horror = !!h;
+      if (horror) {
+        // The room goes quiet when she arrives; the sting does the talking.
+        if (ctx) {
+          try { master.gain.setValueAtTime(0.06, ctx.currentTime); } catch (e) {}
         }
-        musicStep = 0;
-        nextNoteTime = c.currentTime + 0.08;
-        musicTimer = setInterval(() => {
-          try {
-            if (!ctx || ctx.state !== 'running' || muted) return;
-            if (nextNoteTime < ctx.currentTime - 0.1) nextNoteTime = ctx.currentTime + 0.05;
-            const eighth = 60 / 106 / 2; // ~106 BPM, 8th notes
-            while (nextNoteTime < ctx.currentTime + 0.35) {
-              scheduleMusicStep(musicStep, nextNoteTime, eighth);
-              nextNoteTime += eighth;
-              musicStep = (musicStep + 1) % 64; // 8 bars × 8 eighths
-            }
-          } catch { /* scheduler must never throw */ }
-        }, 90);
-      } catch { /* audio unavailable: the game plays silent */ }
+      } else if (ctx && !muted) {
+        try { master.gain.setValueAtTime(0.5, ctx.currentTime); } catch (e) {}
+      }
     },
-    stopMusic() {
-      if (musicTimer) { clearInterval(musicTimer); musicTimer = null; }
-    },
-    chop() { noiseBurst(0.09, 0.5, 900); tone(180, 0.08, 'triangle', 0.25, 0, 90); },
-    pickup() { tone(520, 0.07, 'sine', 0.18); },
-    drop() { tone(300, 0.08, 'sine', 0.2, 0, 180); },
-    ding() { tone(880, 0.35, 'sine', 0.22); tone(1320, 0.3, 'sine', 0.12, 0.02); },
-    serve() { tone(523, 0.12, 'triangle', 0.22); tone(659, 0.12, 'triangle', 0.22, 0.09); tone(784, 0.22, 'triangle', 0.24, 0.18); },
-    fail() { tone(220, 0.25, 'sawtooth', 0.12, 0, 110); },
-    // Horror sting: a dissonant minor-2nd cluster over a low drone.
-    sting() {
-      tone(110, 1.4, 'sawtooth', 0.14, 0, 55);
-      tone(116.5, 1.4, 'sawtooth', 0.14, 0.05);
-      tone(233, 0.9, 'sine', 0.16, 0.1, 116);
-      noiseBurst(0.5, 0.12, 400);
-    },
-    // Kuntilanak laugh: high, descending, a little too cheerful.
-    laugh() {
-      tone(1240, 0.09, 'sine', 0.14, 0);
-      tone(1108, 0.09, 'sine', 0.14, 0.11);
-      tone(988, 0.09, 'sine', 0.14, 0.22);
-      tone(1240, 0.09, 'sine', 0.14, 0.33);
-      tone(1108, 0.12, 'sine', 0.14, 0.44);
-      tone(880, 0.2, 'sine', 0.12, 0.56, 660);
-    },
-    plate() { tone(1046, 0.1, 'triangle', 0.22); tone(1568, 0.18, 'triangle', 0.18, 0.07); },
-    stage() { tone(392, 0.14, 'triangle', 0.2); tone(523, 0.14, 'triangle', 0.2, 0.12); tone(659, 0.24, 'triangle', 0.22, 0.24); },
-    rush() { tone(392, 0.14, 'square', 0.1); tone(523, 0.14, 'square', 0.1, 0.13); tone(659, 0.2, 'square', 0.1, 0.26); },
-    click() { tone(700, 0.05, 'sine', 0.15); },
-    startSizzle() {
-      const c = ensure();
-      if (!c || muted || sizzleNodes) return;
-      const len = c.sampleRate;
-      const buf = c.createBuffer(1, len, c.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < len; i += 1) data[i] = Math.random() * 2 - 1;
-      const src = c.createBufferSource();
-      src.buffer = buf;
-      src.loop = true;
-      const filter = c.createBiquadFilter();
-      filter.type = 'highpass';
-      filter.frequency.value = 3000;
-      const gain = c.createGain();
-      gain.gain.value = 0.045;
-      src.connect(filter).connect(gain).connect(c.destination);
-      src.start();
-      sizzleNodes = { src, gain };
-    },
-    stopSizzle() {
-      if (!sizzleNodes) return;
-      try { sizzleNodes.src.stop(); } catch { /* already stopped */ }
-      sizzleNodes = null;
+    sfx: {
+      chop() { noiseBurst(0.09, 0.4); tone(180, 0.08, 'square', 0.12); },
+      ding() { tone(880, 0.3, 'sine', 0.25); tone(1318.5, 0.4, 'sine', 0.18, ctx ? ctx.currentTime + 0.08 : 0); },
+      serve() { tone(659.25, 0.2, 'sine', 0.25); tone(987.77, 0.35, 'sine', 0.25, ctx ? ctx.currentTime + 0.1 : 0); },
+      fail() { tone(220, 0.5, 'sawtooth', 0.2, 0, 110); },
+      coin() { tone(1318.5, 0.12, 'sine', 0.2); tone(1760, 0.2, 'sine', 0.2, ctx ? ctx.currentTime + 0.07 : 0); },
+      click() { tone(1200, 0.06, 'square', 0.12); },
+      unlock() { tone(523.25, 0.15, 'triangle', 0.25); tone(783.99, 0.3, 'triangle', 0.25, ctx ? ctx.currentTime + 0.12 : 0); },
+      sting() {
+        // A dissonant cluster, the sound of her arrival.
+        tone(110, 1.4, 'sawtooth', 0.22);
+        tone(116.54, 1.4, 'sawtooth', 0.22);
+        tone(220, 1.0, 'sine', 0.15);
+        noiseBurst(0.5, 0.1);
+      },
+      laugh() {
+        // Three short descending blips, like a laugh in the dark.
+        const now = ctx ? ctx.currentTime : 0;
+        tone(880, 0.12, 'square', 0.1, now);
+        tone(740, 0.12, 'square', 0.1, now + 0.14);
+        tone(587, 0.25, 'square', 0.1, now + 0.28);
+      },
     },
   };
 }

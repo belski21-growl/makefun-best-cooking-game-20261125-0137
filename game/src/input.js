@@ -1,65 +1,71 @@
-// Padang Kilat — keyboard + mouse input. WASD/arrows move, E or Space interacts
-// (hold E to chop), M mutes, P/Esc pauses. Clicking a station walks toward it;
-// clicking it again up close interacts.
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_MUTE = 4;
-export const ACTION_CONDIMENT = 8;
-
-export function createInput(canvas) {
-  const keys = new Set();
-  let actions = 0;
-  let clickTarget = null; // {x, y} in logical canvas pixels, or null
-  let clickStation = null; // station key the player clicked, or null
-
-  function key(e) { return e.key.length === 1 ? e.key.toLowerCase() : e.key; }
-
+// Padang Kilat — input.js
+// Keyboard + mouse, distilled into one small object per frame. Movement keys
+// stay in `keys`; one-shot actions (E, B, click, P, M, R, Enter) are edges:
+// they are true for exactly one frame, then endFrame() clears them, so a
+// held key never double-fires an action.
+export function attachInput(canvas) {
+  const input = {
+    keys: {}, // held movement keys, lowercase ('w','arrowup', ...)
+    mx: 0,
+    my: 0,
+    interact: false, // E / Space pressed this frame
+    interactHeld: false, // E / Space currently held (for chopping)
+    unlock: false, // B pressed this frame
+    click: null, // {x, y} in canvas pixels, this frame
+    pausePressed: false,
+    mutePressed: false,
+    restartPressed: false,
+    startPressed: false,
+    endFrame() {
+      input.interact = false;
+      input.unlock = false;
+      input.click = null;
+      input.pausePressed = false;
+      input.mutePressed = false;
+      input.restartPressed = false;
+      input.startPressed = false;
+    },
+  };
+  function toCanvas(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: ((e.clientX - r.left) / r.width) * canvas.width,
+      y: ((e.clientY - r.top) / r.height) * canvas.height,
+    };
+  }
   window.addEventListener('keydown', (e) => {
-    const k = key(e);
-    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
-    if (!e.repeat) {
-      if (k === ' ' || k === 'enter') actions |= ACTION_CONFIRM;
-      if (k === 'p' || k === 'escape') actions |= ACTION_PAUSE;
-      if (k === 'm') actions |= ACTION_MUTE;
-      if (k === 'b') actions |= ACTION_CONDIMENT;
+    const k = e.key.toLowerCase();
+    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) {
+      e.preventDefault();
     }
-    keys.add(k);
-    keys.add(e.key);
+    if (k === 'e' || k === ' ') {
+      if (!e.repeat) input.interact = true;
+      input.interactHeld = true;
+      return;
+    }
+    if (k === 'b' && !e.repeat) input.unlock = true;
+    if (k === 'p' && !e.repeat) input.pausePressed = true;
+    if (k === 'm' && !e.repeat) input.mutePressed = true;
+    if (k === 'r' && !e.repeat) input.restartPressed = true;
+    if (k === 'enter' && !e.repeat) input.startPressed = true;
+    input.keys[k] = true;
   });
   window.addEventListener('keyup', (e) => {
-    keys.delete(key(e));
-    keys.delete(e.key);
+    const k = e.key.toLowerCase();
+    if (k === 'e' || k === ' ') input.interactHeld = false;
+    delete input.keys[k];
   });
-  window.addEventListener('blur', () => keys.clear());
-
-  canvas.addEventListener('pointerdown', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-    clickTarget = { x, y };
-    clickStation = null;
+  canvas.addEventListener('mousemove', (e) => {
+    const p = toCanvas(e);
+    input.mx = p.x;
+    input.my = p.y;
   });
-
-  return {
-    direction() {
-      let dx = 0;
-      let dy = 0;
-      if (keys.has('a') || keys.has('ArrowLeft')) dx -= 1;
-      if (keys.has('d') || keys.has('ArrowRight')) dx += 1;
-      if (keys.has('w') || keys.has('ArrowUp')) dy -= 1;
-      if (keys.has('s') || keys.has('ArrowDown')) dy += 1;
-      if (dx !== 0 && dy !== 0) { dx *= Math.SQRT1_2; dy *= Math.SQRT1_2; }
-      return { dx, dy };
-    },
-    interactHeld() { return keys.has('e') || keys.has(' '); },
-    takeActions() { const a = actions; actions = 0; return a; },
-    takeClick() {
-      const t = clickTarget;
-      clickTarget = null;
-      return t;
-    },
-    setClickStation(name) { clickStation = name; },
-    takeClickStation() { const s = clickStation; clickStation = null; return s; },
-    clearClick() { clickTarget = null; clickStation = null; },
-  };
+  canvas.addEventListener('click', (e) => {
+    const p = toCanvas(e);
+    input.click = p;
+    input.mx = p.x;
+    input.my = p.y;
+    if (input.startPressed === false) input.startPressed = true;
+  });
+  return input;
 }

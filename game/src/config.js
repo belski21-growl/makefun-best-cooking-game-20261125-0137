@@ -1,169 +1,195 @@
-// Padang Kilat — configuration: canvas size, palette, stations, ingredients, recipes.
-// One job: every tunable number and every piece of game data lives here.
+// Padang Kilat — config.js
+// All of the game's data in one place: what the restaurant serves, how long
+// each shift runs, where everything in the room stands. No logic lives here —
+// world.js reads these tables, render.js draws from them. Nothing here is
+// copied from anywhere; every number below is my own choice for this game.
+//
+// The room is a 1280x720 canvas. The top band (y 0..168) is the wall + the
+// ticket board; the floor (y 168..720) is where the chef walks. Stations sit
+// along the top of the floor, customer tables along the bottom, and a wide
+// open corridor runs between them so the chef never gets wedged.
+
 export const W = 1280;
 export const H = 720;
-export const STEP = 1 / 60;
-// Three shifts, not one: PAGI is slow (learn the ropes), SIANG is the
-// normal lunch rush, MALAM is the fastest — and haunted (see kuntilanak).
-export const STAGES = [
-  { id: 'pagi',  name: 'PAGI',  subtitle: 'Buka Warung',    seconds: 120, spawn: 20, patience: 62, target: 30 },
-  { id: 'siang', name: 'SIANG', subtitle: 'Jam Makan',      seconds: 150, spawn: 13, patience: 48, target: 70 },
-  { id: 'malam', name: 'MALAM', subtitle: 'Rush Terakhir',  seconds: 180, spawn: 9,  patience: 40, target: 100 },
+export const HUD_H = 64; // top bar: title, stage, coins, clock, combo
+export const BOARD_H = 104; // ticket board band under the HUD (y 64..168)
+export const WALL_H = 168; // whole top band; the floor starts below it
+
+export const TRAY_MAX = 3; // finished plates the chef can carry at once
+export const CHEF_SPEED = 265; // pixels per second
+export const CHEF_R = 16; // chef collision radius
+export const WIN_COINS = 100; // coins needed by the end of MALAM to win
+export const FAILS_PER_STAGE = 3; // failed tickets that end a stage early
+export const QUEUE_WAIT = 25; // seconds a customer waits at the door
+export const EAT_TIME = 5; // seconds a served customer eats before freeing a seat
+
+// ---------------------------------------------------------------- ingredients
+// prep: 'none' (ready as-is), 'chop', 'cook', 'chopcook' (chop, then cook).
+// chop/cook are the seconds the step takes. cold drinks get ice + mist.
+// state names on a plate: 'raw' -> 'chopped' -> 'cooked'; 'ready' for prep 'none'.
+export const INGREDIENTS = [
+  { id: 'nasi', name: 'Nasi', color: '#f7f2e2', dark: '#d3c49b', prep: 'cook', cook: 4 },
+  { id: 'daging', name: 'Daging', color: '#b4552d', dark: '#7e3418', prep: 'chopcook', chop: 2, cook: 5 },
+  { id: 'ayam', name: 'Ayam', color: '#e8b25a', dark: '#a87a2e', prep: 'chopcook', chop: 2, cook: 5 },
+  { id: 'telur', name: 'Telur', color: '#fdf6d8', dark: '#d9c98f', prep: 'cook', cook: 4 },
+  { id: 'daunUbi', name: 'Daun Ubi', color: '#3f7a3a', dark: '#24511f', prep: 'chop', chop: 2 },
+  { id: 'cabai', name: 'Cabai', color: '#c22e2e', dark: '#7e1a1a', prep: 'chop', chop: 1.5 },
+  { id: 'indomie', name: 'Indomie', color: '#f2c14e', dark: '#b98a1e', prep: 'cook', cook: 3 },
+  { id: 'ketupat', name: 'Ketupat', color: '#cfe3b8', dark: '#8aa86a', prep: 'none' },
+  { id: 'sambalIjo', name: 'Sambal Ijo', color: '#5da24a', dark: '#35702a', prep: 'none' },
+  { id: 'esTeh', name: 'Es Teh', color: '#a8642e', dark: '#6e3f1a', prep: 'none', cold: true },
+  { id: 'tehTalua', name: 'Teh Talua', color: '#e8c96a', dark: '#a8842e', prep: 'none' },
+  { id: 'esJeruk', name: 'Es Jeruk', color: '#f2a541', dark: '#b97a1e', prep: 'none', cold: true },
 ];
-export const TARGET_COINS = 100;
-export const MAX_FAILS = 3;
-// Seating queue: a customer waits this long for a free seat. Leaving angry
-// costs QUEUE_LEAVE_PENALTY coins — NOT a failed ticket (user correction
-// 25 Nov ~15:32). A served customer eats for EAT_SECONDS, then frees the seat.
-export const QUEUE_MAX = 30;
-export const QUEUE_LEAVE_PENALTY = 10;
-export const EAT_SECONDS = 5;
-export const SEATS = [
-  { x: 950, y: 680 },
-  { x: 1080, y: 680 },
-  { x: 1210, y: 680 },
-];
-export const QUEUE_SPOTS = [
-  { x: 1180, y: 620 },
-  { x: 1100, y: 620 },
-  { x: 1020, y: 620 },
-  { x: 940, y: 620 },
-];
-export const BEST_KEY = 'padang-kilat-best-coins';
+export const ING_BY_ID = Object.fromEntries(INGREDIENTS.map((g) => [g.id, g]));
+export const DRINKS = ['esTeh', 'tehTalua', 'esJeruk'];
 
-export const PALETTE = {
-  floor: '#f3e2c2',
-  floorAlt: '#ecd9b4',
-  wall: '#b4552d',
-  wallDark: '#8f3f20',
-  teal: '#1f7a6d',
-  tealDark: '#155e53',
-  cream: '#fff6e3',
-  wood: '#c98a4b',
-  woodDark: '#a96f36',
-  ink: '#33241a',
-  gold: '#f2b234',
-  red: '#d64533',
-  green: '#3f9e4d',
-  batik: '#7a2e4d',
-};
-
-export const INGREDIENTS = {
-  NASI:     { id: 'NASI',     name: 'Nasi',       color: '#fff8e6', prep: 'cook',     prepTime: 3.5 },
-  DAGING:   { id: 'DAGING',   name: 'Daging',     color: '#6e3b1f', prep: 'chopcook', prepTime: 5.0 },
-  AYAM:     { id: 'AYAM',     name: 'Ayam',       color: '#f7e3b0', prep: 'chopcook', prepTime: 3.5 },
-  TELUR:    { id: 'TELUR',    name: 'Telur',      color: '#ffd94d', prep: 'cook',     prepTime: 3.0 },
-  SAYUR:    { id: 'SAYUR',    name: 'Daun Ubi',   color: '#58b368', prep: 'chop',     prepTime: 0 },
-  CABAI:    { id: 'CABAI',    name: 'Cabai',      color: '#d64533', prep: 'chop',     prepTime: 0 },
-  MIE:      { id: 'MIE',      name: 'Indomie',    color: '#f2c14e', prep: 'cook',     prepTime: 3.0 },
-  KETUPAT:  { id: 'KETUPAT',  name: 'Ketupat',    color: '#dfe8c8', prep: 'cook',     prepTime: 3.0 },
-  SAMBAL:   { id: 'SAMBAL',   name: 'Sambal Ijo', color: '#3f9e4d', prep: 'none',     prepTime: 0 },
-  ESTEH:    { id: 'ESTEH',    name: 'Es Teh',     color: '#b4552d', prep: 'none',     prepTime: 0 },
-  TEHTALUA: { id: 'TEHTALUA', name: 'Teh Talua',  color: '#e8c96a', prep: 'none',     prepTime: 0 },
-  ESJERUK:  { id: 'ESJERUK',  name: 'Es Jeruk',   color: '#f2a541', prep: 'none',     prepTime: 0 },
-};
-
-// A finished item is "ID:state": raw, chopped or cooked. Ready items (drinks,
-// sambal ijo) are served as-is, straight from the counter.
-export function itemKey(id, state) { return `${id}:${state}`; }
-export function itemName(key) {
-  const [id, state] = key.split(':');
-  const base = INGREDIENTS[id] ? INGREDIENTS[id].name : id;
-  if (state === 'chopped') return `${base} iris`;
-  if (state === 'cooked') return `${base} matang`;
-  return base;
-}
-export function itemColor(key) {
-  const [id] = key.split(':');
-  return INGREDIENTS[id] ? INGREDIENTS[id].color : '#cccccc';
-}
-
-// 8 Padang recipes: the same 12 ingredients combine in different ways.
-// Rendang is the signature — the highest coins in the house.
+// ---------------------------------------------------------------- recipes
+// needs: the exact items a finished plate must hold (ingredient + state).
+// A plate matches a ticket only when its contents equal the recipe exactly.
+// Rendang is the signature: the most coins in the house.
 export const RECIPES = [
-  { id: 'rendang',     name: 'Nasi Rendang',        needs: ['NASI:cooked', 'DAGING:cooked'],                    coins: 20 },
-  { id: 'indomie',     name: 'Indomie Rendang',     needs: ['MIE:cooked', 'DAGING:cooked'],                     coins: 18 },
-  { id: 'ayampop',     name: 'Ayam Pop',            needs: ['AYAM:cooked', 'NASI:cooked', 'ESJERUK:ready'],     coins: 16 },
-  { id: 'sate',        name: 'Sate Padang',         needs: ['DAGING:cooked', 'KETUPAT:cooked', 'SAMBAL:ready'], coins: 16 },
-  { id: 'gulai',       name: 'Gulai Ayam',          needs: ['AYAM:cooked', 'CABAI:chopped'],                    coins: 14 },
-  { id: 'dendeng',     name: 'Dendeng Balado',      needs: ['DAGING:chopped', 'CABAI:chopped'],                 coins: 14 },
-  { id: 'sayur',       name: 'Nasi Sayur Singkong', needs: ['NASI:cooked', 'SAYUR:chopped', 'ESTEH:ready'],     coins: 14 },
-  { id: 'telurbalado', name: 'Telur Balado',        needs: ['TELUR:cooked', 'CABAI:chopped', 'TEHTALUA:ready'], coins: 14 },
-  // Menu rahasia: never in the random rotation — it only appears as a
-  // ticket after 5 serves in a row without a fail (see kitchen.js).
-  { id: 'kapau',       name: 'Nasi Kapau',          needs: ['NASI:cooked', 'DAGING:cooked', 'SAYUR:chopped'], coins: 25, secret: true },
+  { id: 'nasi-rendang', name: 'Nasi Rendang', coins: 20, signature: true,
+    needs: [{ ing: 'nasi', state: 'cooked' }, { ing: 'daging', state: 'cooked' }] },
+  { id: 'indomie-rendang', name: 'Indomie Rendang', coins: 18,
+    needs: [{ ing: 'indomie', state: 'cooked' }, { ing: 'daging', state: 'cooked' }] },
+  { id: 'ayam-pop', name: 'Ayam Pop', coins: 16,
+    needs: [{ ing: 'ayam', state: 'cooked' }, { ing: 'nasi', state: 'cooked' }] },
+  { id: 'sate-padang', name: 'Sate Padang', coins: 16,
+    needs: [{ ing: 'daging', state: 'cooked' }, { ing: 'ketupat', state: 'ready' }, { ing: 'sambalIjo', state: 'ready' }] },
+  { id: 'gulai-ayam', name: 'Gulai Ayam', coins: 14,
+    needs: [{ ing: 'ayam', state: 'cooked' }, { ing: 'cabai', state: 'chopped' }] },
+  { id: 'dendeng-balado', name: 'Dendeng Balado', coins: 14,
+    needs: [{ ing: 'daging', state: 'cooked' }, { ing: 'cabai', state: 'chopped' }] },
+  { id: 'nasi-sayur', name: 'Nasi Sayur Singkong', coins: 14,
+    needs: [{ ing: 'nasi', state: 'cooked' }, { ing: 'daunUbi', state: 'chopped' }] },
+  { id: 'telur-balado', name: 'Telur Balado', coins: 14,
+    needs: [{ ing: 'telur', state: 'cooked' }, { ing: 'cabai', state: 'chopped' }] },
 ];
-
-export function recipeById(id) { return RECIPES.find((r) => r.id === id); }
-
-// Station rectangles (x, y, w, h) in logical pixels. Crates line the left wall
-// (3 columns: food, then drinks and sambal ijo), the stove sits top-right, the
-// chopping board top-centre, assembly bottom-centre, the etalase (serve) on the
-// right wall, the bin bottom-left.
-export const STATIONS = {
-  crates: [
-    { id: 'NASI',     x: 16,  y: 186, w: 62, h: 62 },
-    { id: 'DAGING',   x: 90,  y: 186, w: 62, h: 62 },
-    { id: 'AYAM',     x: 164, y: 186, w: 62, h: 62 },
-    { id: 'TELUR',    x: 16,  y: 260, w: 62, h: 62 },
-    { id: 'SAYUR',    x: 90,  y: 260, w: 62, h: 62 },
-    { id: 'CABAI',    x: 164, y: 260, w: 62, h: 62 },
-    { id: 'MIE',      x: 16,  y: 334, w: 62, h: 62 },
-    { id: 'KETUPAT',  x: 90,  y: 334, w: 62, h: 62 },
-    { id: 'SAMBAL',   x: 164, y: 334, w: 62, h: 62 },
-    { id: 'ESTEH',    x: 16,  y: 408, w: 62, h: 62 },
-    { id: 'TEHTALUA', x: 90,  y: 408, w: 62, h: 62 },
-    { id: 'ESJERUK',  x: 164, y: 408, w: 62, h: 62 },
+// The secret ninth recipe: only ever offered as a ticket after five straight
+// serves. It is the richest plate on the menu.
+export const SECRET_RECIPE = {
+  id: 'nasi-kapau', name: 'Nasi Kapau', coins: 25, secret: true,
+  needs: [
+    { ing: 'nasi', state: 'cooked' },
+    { ing: 'daging', state: 'cooked' },
+    { ing: 'telur', state: 'cooked' },
+    { ing: 'sambalIjo', state: 'ready' },
   ],
-  chop: { x: 520, y: 186, w: 240, h: 74 },
-  stove: [
-    { x: 920, y: 186, w: 150, h: 84 },
-    { x: 1090, y: 186, w: 150, h: 84 },
-  ],
-  assembly: { x: 470, y: 600, w: 340, h: 96 },
-  // The etalase starts at y340, not y300: the gap between the right stove's
-  // bottom edge (270) and the etalase top must fit the 44px-wide cook, or
-  // the right stove is unreachable (proven 25 Nov: 30px gap + 20px gap to
-  // the left stove + the y=180 clamp boxed it in from every side).
-  pass: { x: 1090, y: 340, w: 144, h: 180 },
-  bin: { x: 16, y: 620, w: 110, h: 76 },
 };
+export const RECIPE_BY_ID = Object.fromEntries(
+  [...RECIPES, SECRET_RECIPE].map((r) => [r.id, r]),
+);
 
-export const PLAYER = { speed: 270, radius: 22, startX: 640, startY: 430 };
-export const INTERACT_RADIUS = 110;
-export const CHOP_SECONDS = 1.1;
-export const TRAY_MAX = 3;
-
-// Dining tables (solid barriers — see TABLES note below). Three different
-// shapes, all in floor dead zones that keep both corridors clear:
-// - round: bottom-left, west of the assembly counter (bin lane runs below it)
-// - square: mid-left, below the top corridor, east of the crates
-// - long bench: mid-right, SOUTH of the assembly↔stove diagonal and clear
-//   of the assembly↔pass diagonal (21px) — it must NOT sit on either
-//   diagonal, or moveToward's below-then-past detour wedges the autopilot
-//   against the pass (proven 25 Nov: 70s freeze at (1098,465)).
-export const TABLES = [
-  { id: 'round', shape: 'round', x: 250, y: 540, w: 100, h: 100, cx: 300, cy: 590, r: 50 },
-  { id: 'square', shape: 'square', x: 295, y: 340, w: 130, h: 80 },
-  { id: 'long', shape: 'long', x: 830, y: 460, w: 180, h: 60 },
+// ---------------------------------------------------------------- moods
+// A ticket's mood changes its economics. HAUS always adds a drink to the
+// order; LAPAR pays a quarter more; TIDAK SELERA and LESU are patient.
+export const MOODS = {
+  normal: { label: '', color: '#fff6e3', patience: 1, coins: 1, drink: false },
+  HAUS: { label: 'HAUS', color: '#3a86d8', patience: 1, coins: 1, drink: true },
+  LAPAR: { label: 'LAPAR', color: '#c22e2e', patience: 1, coins: 1.25, drink: false },
+  'TIDAK SELERA': { label: 'TIDAK SELERA', color: '#8a8a8a', patience: 1.5, coins: 1, drink: false },
+  LESU: { label: 'LESU', color: '#b98a1e', patience: 1.25, coins: 1, drink: false },
+  // MARAH is not rolled at spawn — a ticket turns MARAH when its patience
+  // drops under 25% — but the ticket card reads MOODS[t.mood] too, so the
+  // entry must exist here or the card crashes.
+  MARAH: { label: 'MARAH', color: '#c22e2e', patience: 1, coins: 1, drink: false },
+  PUAS: { label: 'PUAS', color: '#5da24a', patience: 1, coins: 1, drink: false },
+  KENYANG: { label: 'KENYANG', color: '#5da24a', patience: 1, coins: 1, drink: false },
+};
+export const MOOD_TABLE = [
+  ['normal', 0.45],
+  ['HAUS', 0.18],
+  ['LAPAR', 0.15],
+  ['TIDAK SELERA', 0.12],
+  ['LESU', 0.10],
 ];
 
-// Condiment (kerupuk) economy: locked at game start, one 30-coin unlock per
-// game. Seated/eating customers then help themselves at random (~2.5s),
-// +2 coins per take, max 3 takes each.
-export const CONDIMENT_COST = 30;
-export const CONDIMENT_TAKE = 2;
-export const CONDIMENT_TAKE_INTERVAL = 2.5;
-export const CONDIMENT_CAP = 3;
-// HUD unlock button (screen-space chip, top-right of the HUD bar).
-export const CONDIMENT_BUTTON = { x: 1070, y: 8, w: 194, h: 48 };
+// ---------------------------------------------------------------- stages
+// target is cumulative coins by the end of the stage. Three failed tickets
+// end a stage early (PAGI/SIANG roll on; MALAM ends the game). The win is
+// decided on total coins at the end of MALAM.
+export const STAGES = [
+  { name: 'PAGI', subtitle: 'Jam Buka', seconds: 120, target: 25, spawnEvery: 20, patience: 60 },
+  { name: 'SIANG', subtitle: 'Jam Makan', seconds: 150, target: 60, spawnEvery: 15, patience: 50 },
+  { name: 'MALAM', subtitle: 'Jam Ramai', seconds: 180, target: 100, spawnEvery: 12, patience: 42 },
+];
 
-export function spawnInterval(stage, elapsedInStage) {
-  // Tickets arrive faster as the stage goes on: stage.spawn early, ~30% faster late.
-  const t = Math.min(1, elapsedInStage / stage.seconds);
-  return stage.spawn * (1 - 0.3 * t);
+// ---------------------------------------------------------------- the room
+// Stations the chef works at (rects in floor space). The crates hold all
+// twelve ingredients in ONE ROW along the top; the board is where chopping
+// happens; the two stoves cook; the assembly counter builds plates; the
+// etalase is where finished plates are served; the bin throws a held item
+// away. (An earlier 3x4 crates block walled its left column in — the
+// passages around it were 4-10px, narrower than the chef's 32px body, so
+// the left column could never be reached and the autopilot froze.)
+export const STATIONS = {
+  crates: { x: 16, y: 192, w: 1248, h: 72, label: 'BAHAN' },
+  board: { x: 596, y: 312, w: 168, h: 66, label: 'TALENAN' },
+  stove1: { x: 812, y: 312, w: 124, h: 82, label: 'KOMPOR 1' },
+  stove2: { x: 972, y: 312, w: 124, h: 82, label: 'KOMPOR 2' },
+  assembly: { x: 470, y: 440, w: 340, h: 66, label: 'MEJA RACIK' },
+  pass: { x: 1124, y: 300, w: 140, h: 216, label: 'ETALASE · SAJI' },
+  bin: { x: 16, y: 644, w: 112, h: 60, label: 'BUANG' },
+};
+// Crate of ingredient i (0..11): one row of 12 cells inside STATIONS.crates.
+export function crateRect(i) {
+  const c = STATIONS.crates;
+  const cw = c.w / 12;
+  return { x: c.x + i * cw + 4, y: c.y + 4, w: cw - 8, h: c.h - 8 };
 }
-export function patienceMax(stage, elapsedInStage) {
-  const t = Math.min(1, elapsedInStage / stage.seconds);
-  return stage.patience * (1 - 0.3 * t);
-}
+// The three customer tables: three different shapes on purpose — round, a
+// square under a white cloth, and one long bench. They are solid obstacles.
+export const TABLES = [
+  { x: 252, y: 566, w: 132, h: 88, shape: 'round', label: 'Meja Bundar' },
+  { x: 556, y: 566, w: 152, h: 88, shape: 'square', label: 'Meja Taplak' },
+  { x: 828, y: 606, w: 224, h: 56, shape: 'bench', label: 'Bangku Panjang' },
+];
+// The three seats tickets sit in (one per table, at the table's front edge).
+export const SEATS = [
+  { x: 318, y: 668 },
+  { x: 632, y: 668 },
+  { x: 940, y: 676 },
+];
+// The door, bottom-right: the queue forms here. The BUKA sign hangs beside
+// it, fully inside the frame.
+export const DOOR = { x: 1088, y: 648, w: 116, h: 72 };
+export const CHEF_START = { x: 640, y: 390 };
+
+// ---------------------------------------------------------------- kuntilanak
+// She only comes at night. After 60s of MALAM, if the kitchen has been quiet
+// (no open ticket) for ~8s, she drifts in above the etalase and orders three
+// Sate Padang in 45s. Win her order: +40 coins and the Berani! badge. Fail
+// it: -20 coins and the rest of the night is cut in half.
+export const KUNTI = {
+  earliest: 60, quiet: 8, time: 45, reward: 40, fail: -20, sateNeed: 3,
+};
+// ---------------------------------------------------------------- easter eggs
+export const FLYING_PLATE_COINS = 25; // click the haunted plate, 1-2x a stage
+export const KAPAU_STREAK = 5; // straight serves that arm the secret recipe
+// ---------------------------------------------------------------- condiments
+// Kerupuk (kulit, peyek udang, kerupuk udang) starts locked. Unlock once a
+// game for 30 coins; seated customers then help themselves every ~2.5s,
+// +2 coins a take, at most 3 takes per customer.
+export const CONDIMENT = { cost: 30, coins: 2, cap: 3, every: 2.5 };
+// ---------------------------------------------------------------- scoring
+export const KILAT_TIP = 3; // serve before half the patience runs out
+export const WALKOUT_COST = 10; // a customer who leaves angry costs this
+export const COMBO_STEP = 0.15; // multiplier grows 0.15 per streak, cap 2x
+
+// ---------------------------------------------------------------- palette
+export const PALETTE = {
+  cream: '#f6ead0',
+  floorA: '#e9d9b8',
+  floorB: '#dfc79a',
+  wall: '#f3e2bd',
+  songket: '#a31621',
+  songketGold: '#e8b13c',
+  wood: '#8a5a2e',
+  woodDark: '#5f3a1a',
+  teal: '#1f6f6b',
+  ink: '#2b1d12',
+  paper: '#fff6e3',
+  gold: '#f2b234',
+  red: '#c22e2e',
+};
