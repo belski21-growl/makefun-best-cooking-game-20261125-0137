@@ -4,6 +4,11 @@ export function createAudio() {
   let ctx = null;
   let sizzleNodes = null;
   let muted = false;
+  // Backsound: an ORIGINAL Minang-flavoured loop, all synth, no recordings.
+  let musicTimer = null;
+  let musicGain = null;
+  let musicStep = 0;
+  let nextNoteTime = 0;
 
   function ensure() {
     if (!ctx) {
@@ -52,9 +57,112 @@ export function createAudio() {
     src.start(t0);
   }
 
+  // Pentatonic talempong melody (A minor pentatonic: A C D E G), 64 eighth
+  // steps = 8 bars. 0 = rest. Composed for this game — no existing tune.
+  const SCALE = { A4: 440, C5: 523.25, D5: 587.33, E5: 659.25, G5: 783.99, A5: 880, E4: 329.63, D4: 293.66 };
+  const MELODY = [
+    'E5', 0, 'G5', 0, 'A5', 0, 'G5', 'E5',
+    'D5', 0, 'E5', 0, 'G5', 0, 'E5', 0,
+    'E5', 0, 'G5', 0, 'A5', 'G5', 'E5', 'D5',
+    'C5', 0, 'D5', 'E5', 0, 0, 'D5', 0,
+    'E5', 0, 'G5', 0, 'A5', 0, 'G5', 'E5',
+    'A5', 0, 'G5', 'E5', 'D5', 0, 'E5', 0,
+    'D5', 'C5', 'D5', 0, 'E5', 0, 'D5', 'C5',
+    'A4', 0, 'C5', 'D5', 'E5', 0, 'D5', 0,
+  ];
+  // Saluang (flute): one long breath per two bars, root notes of the phrase.
+  const SALUANG = ['A4', 'E5', 'A4', 'D5'];
+  const GONG_FREQ = 55;
+
+  function musicNote(freq, t0, dur, type, vol) {
+    if (!ctx || !musicGain) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(vol, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(gain).connect(musicGain);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.05);
+  }
+
+  function scheduleMusicStep(step, t0, eighth) {
+    // Talempong: bright triangle, fast decay — the plucked metallophone.
+    const m = MELODY[step % 64];
+    if (m) musicNote(SCALE[m], t0, eighth * 1.8, 'triangle', 0.055);
+    // Soft drum pulse on every bar start.
+    if (step % 8 === 0) musicNote(98, t0, 0.16, 'sine', 0.05);
+    // Saluang: long sine with vibrato, one breath per two bars.
+    if (step % 16 === 0) {
+      const f = SCALE[SALUANG[(step / 16) % 4]];
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, t0);
+      lfo.frequency.value = 5.5;
+      lfoGain.gain.value = 5;
+      lfo.connect(lfoGain).connect(osc.frequency);
+      const dur = eighth * 16;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.038, t0 + 0.5);
+      gain.gain.setValueAtTime(0.038, t0 + dur - 0.6);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(gain).connect(musicGain);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.05);
+      lfo.start(t0);
+      lfo.stop(t0 + dur + 0.05);
+    }
+    // Gong: low sine, long decay, once per 8-bar loop.
+    if (step % 64 === 0) {
+      musicNote(GONG_FREQ, t0, 3.5, 'sine', 0.11);
+      musicNote(GONG_FREQ * 2, t0, 2.2, 'sine', 0.045);
+    }
+  }
+
   return {
     unlock() { ensure(); },
-    toggleMute() { muted = !muted; return muted; },
+    toggleMute() {
+      muted = !muted;
+      if (musicGain) {
+        try { musicGain.gain.value = muted ? 0 : 0.9; } catch { /* node gone */ }
+      }
+      return muted;
+    },
+    // ---- backsound: talempong + saluang + gong, ~106 BPM, 8-bar loop ----
+    startMusic() {
+      try {
+        const c = ensure();
+        if (!c || muted || musicTimer) return;
+        if (c.state !== 'running') return; // headless/suspended: never throw, never pile up
+        if (!musicGain) {
+          musicGain = c.createGain();
+          musicGain.gain.value = 0.9;
+          musicGain.connect(c.destination);
+        }
+        musicStep = 0;
+        nextNoteTime = c.currentTime + 0.08;
+        musicTimer = setInterval(() => {
+          try {
+            if (!ctx || ctx.state !== 'running' || muted) return;
+            if (nextNoteTime < ctx.currentTime - 0.1) nextNoteTime = ctx.currentTime + 0.05;
+            const eighth = 60 / 106 / 2; // ~106 BPM, 8th notes
+            while (nextNoteTime < ctx.currentTime + 0.35) {
+              scheduleMusicStep(musicStep, nextNoteTime, eighth);
+              nextNoteTime += eighth;
+              musicStep = (musicStep + 1) % 64; // 8 bars × 8 eighths
+            }
+          } catch { /* scheduler must never throw */ }
+        }, 90);
+      } catch { /* audio unavailable: the game plays silent */ }
+    },
+    stopMusic() {
+      if (musicTimer) { clearInterval(musicTimer); musicTimer = null; }
+    },
     chop() { noiseBurst(0.09, 0.5, 900); tone(180, 0.08, 'triangle', 0.25, 0, 90); },
     pickup() { tone(520, 0.07, 'sine', 0.18); },
     drop() { tone(300, 0.08, 'sine', 0.2, 0, 180); },

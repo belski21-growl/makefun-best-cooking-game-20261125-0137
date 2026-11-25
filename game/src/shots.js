@@ -53,6 +53,12 @@ export function stageShot(name, world) {
     // flicker, fog drifts in, and her ticket runs blood-red on black.
     world.setKuntilanakActive();
     settle(world, 0.4);
+    // Restage the entrance startle at full strength after the settle
+    // (same pattern as the chop scene restaging chopping): the chef jumps
+    // back from the etalase, scared face + big "!" + shake, all visible.
+    s.startle = 2.0;
+    s.scared = 1.6;
+    s.shake = 0.7;
     return { screen: SCREEN_PLAY, best: 0 };
   }
   // Default: play — the cover. Mid-service in SIANG, everything in one frame:

@@ -1,8 +1,9 @@
 // Padang Kilat — the kitchen world: player movement, stations, chopping, cooking,
 // assembly, serving, tickets, particles and win/lose. One job: the rules.
 import {
-  CHOP_SECONDS, EAT_SECONDS, H, INGREDIENTS, INTERACT_RADIUS, MAX_FAILS, PLAYER,
-  QUEUE_LEAVE_PENALTY, QUEUE_MAX, QUEUE_SPOTS, RECIPES, SEATS, STAGES, STATIONS,
+  CHOP_SECONDS, CONDIMENT_CAP, CONDIMENT_COST, CONDIMENT_TAKE, CONDIMENT_TAKE_INTERVAL,
+  EAT_SECONDS, H, INGREDIENTS, INTERACT_RADIUS, MAX_FAILS, PLAYER,
+  QUEUE_LEAVE_PENALTY, QUEUE_MAX, QUEUE_SPOTS, RECIPES, SEATS, STAGES, STATIONS, TABLES,
   TARGET_COINS, TRAY_MAX, W, recipeById,
 } from './config.js';
 import { createKuntilanakTicket, createSecretTicket, createTicket, findTicketForRecipe, nextSpawnDelay, serveValue, updateTickets } from './orders.js';
@@ -60,6 +61,13 @@ export function createWorld(rng) {
       // Flying plate easter egg: 1–2 crossings per stage, click it for +25.
       flyingPlate: { active: false, x: -100, y: 210, vx: 0, t: 0, nextAt: 25 + rng() * 20 },
       shake: 0, scared: 0,
+      // Startle on her entrance (not just on her angry exit): the chef
+      // jumps back, "!" over his head, screen shake. Decays like scared.
+      startle: 0, startleSeen: false,
+      // Condiment (kerupuk): locked until the player pays 30 coins once
+      // per game; then seated/eating customers take at random, +2 each.
+      condiment: { unlocked: false, bonus: 0, takes: 0, timer: CONDIMENT_TAKE_INTERVAL },
+      lastCondimentDeny: -99,
     };
   }
 
@@ -86,7 +94,7 @@ export function createWorld(rng) {
       ticketId: ticket.id, state: 'queue',
       x: 1264, y: 620, tx: spot.x, ty: spot.y,
       seatIndex: -1, queueLeft: QUEUE_MAX, queueMax: QUEUE_MAX, eatLeft: 0,
-      mood: ticket.mood || null, angry: false, gone: false,
+      mood: ticket.mood || null, angry: false, gone: false, condimentTakes: 0,
     });
   }
   function seatCustomer(c) {
@@ -102,6 +110,45 @@ export function createWorld(rng) {
     }
     c.state = 'eating';
     c.eatLeft = EAT_SECONDS;
+  }
+
+  // Her entrance startles the chef: scared face + shake + a jump BACK,
+  // away from the etalase she floats over. Called from the live activation
+  // in step() and from setKuntilanakActive() (screenshot staging).
+  function triggerKuntilanakEntrance() {
+    state.startle = 2.0;
+    state.scared = 1.6;
+    state.shake = 0.7;
+    state.startleSeen = true;
+    const p = state.player;
+    const cx = STATIONS.pass.x + STATIONS.pass.w / 2;
+    const cy = STATIONS.pass.y + STATIONS.pass.h / 2;
+    let dx = p.x - cx;
+    let dy = p.y - cy;
+    const d = Math.hypot(dx, dy) || 1;
+    dx /= d; dy /= d;
+    p.x = Math.max(20, Math.min(W - 20, p.x + dx * 70));
+    p.y = Math.max(180, Math.min(H - 16, p.y + dy * 70));
+    pushOutOfCounters();
+  }
+
+  // Condiment unlock: the SAME function the HUD button, the B key and the
+  // autopilot all call (30 coins once per game). Silent false when the
+  // player cannot afford it yet, except a throttled "need coins" float.
+  function unlockCondiment() {
+    const c = state.condiment;
+    if (c.unlocked) return true;
+    if (state.coins < CONDIMENT_COST) {
+      if (state.elapsed - state.lastCondimentDeny > 2) {
+        state.lastCondimentDeny = state.elapsed;
+        addFloat(state.player.x, state.player.y - 40, `Butuh ${CONDIMENT_COST} koin buka kerupuk!`, '#d64533');
+      }
+      return false;
+    }
+    state.coins -= CONDIMENT_COST;
+    c.unlocked = true;
+    addFloat(state.player.x, state.player.y - 40, 'Kerupuk dibuka! +2/ambil', '#3f9e4d');
+    return true;
   }
 
   function plateMatchesRecipe() {
@@ -318,7 +365,9 @@ export function createWorld(rng) {
 
   function pushOutOfCounters() {
     const p = state.player;
-    const solids = [STATIONS.chop, ...STATIONS.stove, STATIONS.assembly, STATIONS.pass];
+    // Dining tables are solid too — every new solid barrier lives here AND
+    // in moveToward()'s solids list in main.js, or the autopilot wedges.
+    const solids = [STATIONS.chop, ...STATIONS.stove, STATIONS.assembly, STATIONS.pass, ...TABLES];
     for (const r of solids) {
       const cx = Math.max(r.x, Math.min(p.x, r.x + r.w));
       const cy = Math.max(r.y, Math.min(p.y, r.y + r.h));
@@ -382,6 +431,7 @@ export function createWorld(rng) {
     state.elapsed += dt;
     if (state.shake > 0) state.shake = Math.max(0, state.shake - dt);
     if (state.scared > 0) state.scared = Math.max(0, state.scared - dt);
+    if (state.startle > 0) state.startle = Math.max(0, state.startle - dt);
 
     // Stage transition: the overlay shows, the kitchen waits.
     if (state.transition > 0) {
@@ -436,6 +486,7 @@ export function createWorld(rng) {
           state.ticketSeq += 1;
           state.tickets.push(createKuntilanakTicket(state.ticketSeq));
           addFloat(1190, 280, 'Dia datang...', '#e8e8f0');
+          triggerKuntilanakEntrance();
           events |= EVENT_KUNTILANAK;
         }
       }
@@ -537,6 +588,31 @@ export function createWorld(rng) {
     }
     state.customers = state.customers.filter((c) => !c.gone);
 
+    // Condiment: once unlocked, a seated/eating customer helps themselves
+    // at random about every 2.5s — +2 coins each, max 3 takes per customer.
+    // The take is picked from the world's own rng, so a seed replays it.
+    const cond = state.condiment;
+    if (cond.unlocked && !state.over) {
+      cond.timer -= dt;
+      if (cond.timer <= 0) {
+        cond.timer = CONDIMENT_TAKE_INTERVAL * (0.7 + rng() * 0.6);
+        const eligible = state.customers.filter(
+          (c) => (c.state === 'seated' || c.state === 'eating') && c.condimentTakes < CONDIMENT_CAP,
+        );
+        if (eligible.length > 0) {
+          const c = eligible[Math.floor(rng() * eligible.length)];
+          c.condimentTakes += 1;
+          cond.takes += 1;
+          cond.bonus += CONDIMENT_TAKE;
+          state.coins += CONDIMENT_TAKE;
+          addFloat(c.x, c.y - 36, `+${CONDIMENT_TAKE} kerupuk`, '#f2b234');
+          for (let i = 0; i < 3; i += 1) {
+            state.particles.push({ x: c.x + (rng() - 0.5) * 20, y: c.y - 28, vy: -30 - rng() * 20, life: 0.6, max: 0.6, size: 3 + rng() * 3 });
+          }
+        }
+      }
+    }
+
     // Pots cook — and keep steaming after they are done, like real food.
     for (const pot of state.pots) {
       if (pot.item && !pot.done) {
@@ -554,7 +630,7 @@ export function createWorld(rng) {
       }
     }
     // A finished dish on the etalase steams too — hot food stays hot.
-    if (state.passDish && rng() < dt * 4) addSteam(1192, 440);
+    if (state.passDish && rng() < dt * 4) addSteam(1162, 440);
 
     // Player movement: keyboard, or click-to-walk target.
     let dx = input.dx;
@@ -638,11 +714,12 @@ export function createWorld(rng) {
     state.kuntilanak = { status: 'active', quiet: 0, lull: true };
     state.ticketSeq += 1;
     state.tickets.push(createKuntilanakTicket(state.ticketSeq));
+    triggerKuntilanakEntrance();
   }
 
   return {
     state, step, reset, nearestStation, plateMatchesRecipe, currentStage,
-    tryCatchPlate, spawnFlyingPlate,
+    tryCatchPlate, spawnFlyingPlate, unlockCondiment,
     forceTicket, setPlate, setPassDish, setTray, setCoins, setElapsed, setPot, placePlayer,
     setStage, setKuntilanakActive,
   };

@@ -125,7 +125,7 @@ export const STATIONS = {
   // bottom edge (270) and the etalase top must fit the 44px-wide cook, or
   // the right stove is unreachable (proven 25 Nov: 30px gap + 20px gap to
   // the left stove + the y=180 clamp boxed it in from every side).
-  pass: { x: 1120, y: 340, w: 144, h: 180 },
+  pass: { x: 1090, y: 340, w: 144, h: 180 },
   bin: { x: 16, y: 620, w: 110, h: 76 },
 };
 
@@ -133,6 +133,30 @@ export const PLAYER = { speed: 270, radius: 22, startX: 640, startY: 430 };
 export const INTERACT_RADIUS = 110;
 export const CHOP_SECONDS = 1.1;
 export const TRAY_MAX = 3;
+
+// Dining tables (solid barriers — see TABLES note below). Three different
+// shapes, all in floor dead zones that keep both corridors clear:
+// - round: bottom-left, west of the assembly counter (bin lane runs below it)
+// - square: mid-left, below the top corridor, east of the crates
+// - long bench: mid-right, SOUTH of the assembly↔stove diagonal and clear
+//   of the assembly↔pass diagonal (21px) — it must NOT sit on either
+//   diagonal, or moveToward's below-then-past detour wedges the autopilot
+//   against the pass (proven 25 Nov: 70s freeze at (1098,465)).
+export const TABLES = [
+  { id: 'round', shape: 'round', x: 250, y: 540, w: 100, h: 100, cx: 300, cy: 590, r: 50 },
+  { id: 'square', shape: 'square', x: 295, y: 340, w: 130, h: 80 },
+  { id: 'long', shape: 'long', x: 830, y: 460, w: 180, h: 60 },
+];
+
+// Condiment (kerupuk) economy: locked at game start, one 30-coin unlock per
+// game. Seated/eating customers then help themselves at random (~2.5s),
+// +2 coins per take, max 3 takes each.
+export const CONDIMENT_COST = 30;
+export const CONDIMENT_TAKE = 2;
+export const CONDIMENT_TAKE_INTERVAL = 2.5;
+export const CONDIMENT_CAP = 3;
+// HUD unlock button (screen-space chip, top-right of the HUD bar).
+export const CONDIMENT_BUTTON = { x: 1070, y: 8, w: 194, h: 48 };
 
 export function spawnInterval(stage, elapsedInStage) {
   // Tickets arrive faster as the stage goes on: stage.spawn early, ~30% faster late.

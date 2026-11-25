@@ -4,6 +4,7 @@
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
 export const ACTION_MUTE = 4;
+export const ACTION_CONDIMENT = 8;
 
 export function createInput(canvas) {
   const keys = new Set();
@@ -20,6 +21,7 @@ export function createInput(canvas) {
       if (k === ' ' || k === 'enter') actions |= ACTION_CONFIRM;
       if (k === 'p' || k === 'escape') actions |= ACTION_PAUSE;
       if (k === 'm') actions |= ACTION_MUTE;
+      if (k === 'b') actions |= ACTION_CONDIMENT;
     }
     keys.add(k);
     keys.add(e.key);

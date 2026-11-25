@@ -189,6 +189,87 @@ signature condiment.
   neighbours, improve, and resubmit before the final 20:37 WIB (if rounds
   remain + after user approval).
 
+## Revisi visual 25 Nov ~16:10–17:55 WIB (builder pass, sesudah Goldfish round 1)
+
+User 16:06: ruangan kosong kayak lapangan, bukan rumah makan. Yang diubah:
+- **Ruangan dibangun ulang dari foto ref RM Padang asli** (`references-padang.md`,
+  `ref/etalase-malam.png`, `ref/ruang-ramai.jpg` — foto HANYA referensi, tidak
+  ikut ke `game/`): lantai ubin kotak + wajik marawa (merah/emas), pita songket
+  merah-kuning-hitam di dinding + siluet gonjong di kedua ujung pita, papan menu
+  dinding 8 resep + harga koin (14px), jam dinding romawi + kipas angin
+  plafon berputar, tanda "BUKA" di dekat pintu, 3 lampu gantung hangat tetap.
+- **Etalase proper** (pass, kanan): rak atas 3 tumpuk piring putih + papan nama
+  kecil (SAYUR/AYAM/GULAI) + rak bawah 3 mangkuk tanah liat berkuah (sambal
+  hijau, ayam gulai, dendeng) + kilau kaca tetap.
+- **3 meja beda + 5 pelanggan ambient** (wajah/mood beda: puas, kenyang, lapar,
+  haus, lesu + 1 hijab): bundar, kotak (taplak putih), bangku panjang; di tiap
+  meja piring-piring kecil hidang berjejer + 3 mangkuk condiment. STATIONS
+  TIDAK dipindah; koridor atas (y270–320) + vertikal assembly→atas tetap
+  kosong. Meja solid di `TABLES` (config.js) → `pushOutOfCounters()`
+  (kitchen.js) + `moveToward()` (main.js).
+- **Fitur baru**: (a) efek kaget kuntilanak MASUK — `startle=2.0` + `scared=1.6`
+  + `shake=0.7` + koki melonjak mundur menjauhi etalase + "!" raksasa di
+  cakram putih (terlihat di 4-serve); (b) condiment kerupuk — terkunci,
+  buka 30 koin sekali/game via tombol HUD "Buka Kerupuk — 30 koin" (klik) /
+  tombol B / autopilot panggil `world.unlockCondiment()` yang SAMA; setelah
+  dibuka pelanggan duduk/makan ambil acak ~2,5 dtk, +2/ambil, cap 3/pelanggan,
+  float "+2 kerupuk" + partikel; (c) backsound Minang synth SEMUA (tanpa file
+  audio/rekaman): talempong pentatonik ~106 BPM (triangle, decay cepat) +
+  saluang (sine + vibrato, nada panjang tiap 2 bar) + gong tiap 8 bar (sine
+  55 Hz, decay 3,5 dtk) + drum halus tiap bar; ikut mute (M); mulai saat
+  startGame, berhenti saat jeda/game-over, HENING saat kuntilanak aktif,
+  kembali saat dia pergi; scheduler ber-guard (ctx null/suspended → skip,
+  try/catch) — headless tidak crash.
+- **UI**: HUD lebih besar (koin/timer 30→36px, judul 28px), ikon hidangan di
+  tiket 44→52 di atas piring ber-shading, nama+koin lebih besar, progress
+  bar talenan/kompor lebih tebal + border putih, panel menu proper di title
+  screen (8 resep + harga + 1 rahasia), label stasiun tetap.
+- **Bug autopilot yang ditemukan & diperbaiki selama sim** (bukan dari revisi
+  visual, tapi memblokir verifikasi): (1) `H` dipakai di `moveToward()`
+  (main.js:111) tapi tidak pernah di-import — autopilot melempar
+  ReferenceError tiap frame dan game macet di 0 koin (71.823 pageerror di
+  satu run); sebelumnya sim lama tidak menemukan ini karena script-nya hilang
+  dan shot tidak memakai autopilot. Fix: import `H`. (2) Meja panjang pertama
+  (860,380,280,60) membuat autopilot BEKU 70 dtk di (1098,465): escape timur
+  meja tertutup pass — fix: meja dipindah ke (830,460,180,60), di luar kedua
+  diagonal, + guard `laneBlocked()` di `moveToward()` (escape yang tertutup
+  solid lain dialihkan ke sisi seberang).
+- **Yang TIDAK berubah**: 3 stage PAGI 120s/SIANG 150s/MALAM 180s; kuntilanak
+  45 DETIK; Piring Terbang +25; Nasi Kapau rahasia (5 sajian beruntun);
+  HAUS/LAPAR/TIDAK SELERA/LESU/MARAH/PUAS/KENYANG; antrean kursi (pergi
+  marah −10, bukan gagal); kombo + Pelayanan Kilat +3.
+
+## Angka sim baru (Playwright Chromium headless + serve.ts :8080, script baru
+`sim.mjs` di entry root; fast-forward via stub rAF + performance.now;
+0 console error di SEMUA run, termasuk musik)
+
+- `?auto=win`: seed 20261125 MENANG 494 koin (served 13, failed 5);
+  seed 7 MENANG 185 koin (served 5, failed 6); seed 99 MENANG 216 koin
+  (served 6, failed 6) — **3/3 menang**, semua di atas target 100, tapi
+  seed 7/99 TIDAK setinggi 474–541 seperti dulu: probe posisi membuktikan
+  bukan macet (tidak ada freeze; serve ~1/24 dtk, jeda antar tiket karena
+  spawn PAGI 20 dtk) — melainkan variansi seed (resep/mood) + autopilot yang
+  melayani strictly oldest-first. Manusia yang paralel (masak sambil iris)
+  akan lebih cepat dari autopilot ini.
+- `?auto=lose`: KALAH, 0 koin — PASS.
+- Condiment (di tiap seed menang): unlock terjadi, bonus 140 / 90 / 90
+  (takes 70 / 45 / 45) — semua > 30 (net-positif setelah biaya 30).
+- Kuntilanak probe `?shot=serve`: startle=2.0, scared=1.6, shake=0.7,
+  startleSeen=true, status active — PASS. Plus tes Node langsung ke
+  `kitchen.js` (`test-kuntilanak-live.mjs`): jalur AKTIVASI ASLI di `step()`
+  memunculkan dia setelah 8 dtk dapur kosong + set startle/scared/shake yang
+  sama + tiket 45 dtk ×3 sate — PASS. Catatan jujur: di 3 run `?auto=win`
+  kuntilanak TIDAK sempat muncul (kuntilanakSeen=false) — MALAM berakhir
+  duluan karena 3 gagal / papan tidak pernah kosong 8 dtk; entrance-nya
+  terbukti lewat probe di atas, bukan lewat run menang.
+- Grader-style run: `MAKEFUN_OUTPUT_DIR=out node main.ts` exit 0,
+  dossier.json 868.892 byte (< 1,5 MiB), 4 screenshot @ 116–148 KiB
+  (< 256 KiB). Cover dicek di 768×432: ruangan ramai (meja + pelanggan +
+  etalase + gonjong/songket) masih terbaca.
+- Screenshot baru (re-shoot `?shot=`): 1-play (cover ramai), 2-start (title
+  + gonjong + panel menu), 3-chop (iris + progress tebal), 4-serve (koki
+  kaget "!" + kuntilanak + horror gelap).
+
 ## Verdict sought from Goldfish
 
 Score per criterion (/25 total), verdict LAYAK SUBMIT / LAYAK LANJUT BELUM

@@ -4,10 +4,10 @@
 // screenshot scene instead of running the loop. ?auto=win runs a scripted
 // autopilot through the real controls (used to prove the game is winnable);
 // ?auto=lose stands still (used to prove it is losable).
-import { BEST_KEY, INGREDIENTS, INTERACT_RADIUS, RECIPES, STATIONS, STEP, recipeById } from './config.js';
+import { BEST_KEY, CONDIMENT_BUTTON, H, INGREDIENTS, INTERACT_RADIUS, RECIPES, STATIONS, STEP, TABLES, recipeById } from './config.js';
 import { createRandom } from './random.js';
 import { createWorld, EVENT_CHOP, EVENT_DING, EVENT_DROP, EVENT_FAILED, EVENT_KUNTILANAK, EVENT_KUNTILANAK_FAIL, EVENT_KUNTILANAK_WIN, EVENT_LOSE, EVENT_NO_ORDER, EVENT_PICKUP, EVENT_PLATE, EVENT_RUSH, EVENT_SERVED, EVENT_STAGE, EVENT_WIN } from './kitchen.js';
-import { ACTION_CONFIRM, ACTION_MUTE, ACTION_PAUSE, createInput } from './input.js';
+import { ACTION_CONDIMENT, ACTION_CONFIRM, ACTION_MUTE, ACTION_PAUSE, createInput } from './input.js';
 import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 import { createAudio } from './audio.js';
 import { stageShot } from './shots.js';
@@ -103,7 +103,14 @@ function moveToward(worldState, target) {
   // holding the target itself never blocks, and neither does a rect the
   // player already stands inside (it cannot — push-out forbids it — but
   // the guard keeps a segment starting inside a rect from detouring).
-  const solids = [STATIONS.chop, ...STATIONS.stove, STATIONS.assembly, STATIONS.pass];
+  const solids = [STATIONS.chop, ...STATIONS.stove, STATIONS.assembly, STATIONS.pass, ...TABLES];
+  // Is a point on the player's current lane blocked by another solid
+  // (expanded by the chef's radius)? The escape past one counter can run
+  // straight into the next — e.g. the long table's east escape used to run
+  // into the pass, wedging the autopilot at the pass's south-west corner
+  // (proven 25 Nov: frozen 70s at (1098,465)). A blocked escape falls back
+  // to the other side instead of shoving into a wall forever.
+  const laneBlocked = (x, y) => solids.some((o) => x >= o.x - 26 && x <= o.x + o.w + 26 && y >= o.y - 26 && y <= o.y + o.h + 26);
   for (const r of solids) {
     if (target.x >= r.x && target.x <= r.x + r.w && target.y >= r.y && target.y <= r.y + r.h) continue;
     if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) continue;
@@ -120,10 +127,16 @@ function moveToward(worldState, target) {
       // first — straight down from here would push against its face.
       const left = Math.abs(p.x - (r.x - 34));
       const right = Math.abs(p.x - (r.x + r.w + 34));
-      return { dx: left <= right ? -1 : 1, dy: 0 };
+      const leftFree = !laneBlocked(r.x - 34, p.y);
+      const rightFree = !laneBlocked(r.x + r.w + 34, p.y);
+      if (leftFree && rightFree) return { dx: left <= right ? -1 : 1, dy: 0 };
+      if (leftFree) return { dx: -1, dy: 0 };
+      if (rightFree) return { dx: 1, dy: 0 };
+      return { dx: 0, dy: 1 }; // both escapes blocked: drop south first
     }
     if (p.y < belowLine) return { dx: 0, dy: 1 };
-    const farX = target.x > p.x ? r.x + r.w + 34 : r.x - 34;
+    let farX = target.x > p.x ? r.x + r.w + 34 : r.x - 34;
+    if (laneBlocked(farX, p.y)) farX = target.x > p.x ? r.x - 34 : r.x + r.w + 34;
     if (Math.abs(p.x - farX) > 12) return { dx: Math.sign(farX - p.x), dy: 0 };
     break;
   }
@@ -247,7 +260,7 @@ function runShot(name) {
     renderer.draw(world.state, world, scene.screen, scene.best);
     painted += 1;
     if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
+    else { exposeState(scene.screen); window.__shotReady = true; }
   }
   requestAnimationFrame(paint);
 }
@@ -261,6 +274,11 @@ function exposeState(screen) {
     stageIndex: s.stageIndex, stageElapsed: Math.round(s.stageElapsed * 10) / 10,
     transition: Math.round(s.transition * 10) / 10, kuntilanak: s.kuntilanak.status,
     badges: [...s.badges], flyingPlate: s.flyingPlate.active, kapauDue: s.kapauDue,
+    condimentUnlocked: s.condiment.unlocked, condimentBonus: s.condiment.bonus,
+    condimentTakes: s.condiment.takes, startle: Math.round(s.startle * 100) / 100,
+    startleSeen: s.startleSeen, scared: Math.round(s.scared * 100) / 100,
+    shake: Math.round(s.shake * 100) / 100,
+    px: Math.round(s.player.x), py: Math.round(s.player.y),
   };
 }
 
@@ -304,12 +322,14 @@ function runGame() {
     world.reset();
     accumulator = 0;
     screen = SCREEN_PLAY;
+    audio.startMusic();
     announce('Playing. Serve the tickets before their patience runs out.');
   }
 
   function endGame(events) {
     screen = SCREEN_OVER;
     audio.stopSizzle();
+    audio.stopMusic();
     if (world.state.coins > best) { best = world.state.coins; saveBest(best); }
     announce(world.state.won
       ? `Shift complete, you win. ${world.state.coins} coins.`
@@ -319,13 +339,16 @@ function runGame() {
   function handleActions() {
     const actions = input.takeActions();
     if (actions & ACTION_MUTE) audio.toggleMute();
+    if (actions & ACTION_CONDIMENT) world.unlockCondiment();
     if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
     else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
       audio.stopSizzle();
+      audio.stopMusic();
       announce('Paused.');
     } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
       screen = SCREEN_PLAY;
+      audio.startMusic();
       announce('Playing.');
     }
     // R restarts from the game-over screen.
@@ -350,19 +373,28 @@ function runGame() {
     const click = input.takeClick();
     if (click) {
       audio.unlock();
-      const plateEvents = world.tryCatchPlate(click.x, click.y);
-      if (plateEvents) {
-        handleEvents(plateEvents);
+      // The condiment unlock chip (HUD top-right) is checked first: it is
+      // screen-space UI, not a station — the same world.unlockCondiment()
+      // the B key and the autopilot call.
+      const b = CONDIMENT_BUTTON;
+      if (click.x >= b.x && click.x <= b.x + b.w && click.y >= b.y && click.y <= b.y + b.h) {
+        world.unlockCondiment();
         mouseStation = null;
       } else {
-        const hit = hitStation(click.x, click.y);
-        if (hit) {
-          world.state.moveTarget = stationCentre(hit);
-          mouseStation = hit;
-          mouseStationSince = performance.now();
-        } else {
-          world.state.moveTarget = { x: click.x, y: click.y };
+        const plateEvents = world.tryCatchPlate(click.x, click.y);
+        if (plateEvents) {
+          handleEvents(plateEvents);
           mouseStation = null;
+        } else {
+          const hit = hitStation(click.x, click.y);
+          if (hit) {
+            world.state.moveTarget = stationCentre(hit);
+            mouseStation = hit;
+            mouseStationSince = performance.now();
+          } else {
+            world.state.moveTarget = { x: click.x, y: click.y };
+            mouseStation = null;
+          }
         }
       }
     }
@@ -390,12 +422,19 @@ function runGame() {
       dir = ai;
       interact = ai.interact;
       world.state.moveTarget = null;
+      // Condiment economy check, through the same unlock the HUD button
+      // calls: buy the moment the house can afford it (30 coins).
+      if (world.state.coins >= 30) world.unlockCondiment();
     } else if (autoMode === 'lose') {
       dir = { dx: 0, dy: 0 };
       interact = false;
     }
     const events = world.step(STEP, { dx: dir.dx, dy: dir.dy, interact }, false);
     handleEvents(events);
+    // Backsound follows the horror: silent while she is here, back when
+    // she leaves (same pattern as the sizzle in handleEvents).
+    if (world.state.kuntilanak.status === 'active') audio.stopMusic();
+    else audio.startMusic();
     if (events & (EVENT_WIN | EVENT_LOSE)) endGame(events);
   }
 
@@ -441,6 +480,7 @@ function runGame() {
     if (document.hidden && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
       audio.stopSizzle();
+      audio.stopMusic();
       announce('Paused.');
     }
   });
